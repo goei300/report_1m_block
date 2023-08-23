@@ -11,7 +11,7 @@
 
 /* returns packet id */
 
-unsigned char* harmfulSite = NULL;
+FILE *harmfulSite = NULL;
 unsigned char* host_str=NULL;
 int check=0;
 void dump2(unsigned char* buf, int size) {
@@ -25,10 +25,10 @@ void dump2(unsigned char* buf, int size) {
 }
 
 unsigned char* get_http_start_address(unsigned char* buf) {
-    // Calculate ip header length (lower 4its of 1st bytes) & word to byte
+    // Extract IP header length from the IHL field (lower 4 bits of first byte)
     int ip_header_len = (buf[0] & 0x0F) * 4;
 
-    // Calculate tcp header length (higher 4bits of 13th bytes) BUT it is word. so convert it to byte
+    // Extract TCP header length (data offset) from the 13th byte of TCP header
     int tcp_header_len = ((buf[ip_header_len + 12] >> 4) & 0x0F) * 4;
     // Calculate HTTP start address
     unsigned char* http_start = buf + ip_header_len + tcp_header_len;
@@ -55,11 +55,43 @@ bool isHttp(unsigned char* buf, int size) {
     return false;
 }
 
-bool isHarmful(unsigned char* site, unsigned char* hSite){
-	if(strncmp(site,hSite,strlen(hSite)+1)==0){
-		return true;
-	}
-	return false;
+bool binarySearch(FILE *hSite, unsigned char *site) {
+    fseek(hSite, 0, SEEK_END);
+    long left = 0, right = ftell(hSite) - 1;
+
+    char buffer[105]; 
+    
+    while (left <= right) {
+        long middle = (left + right) / 2;
+        
+
+        fseek(hSite, middle, SEEK_SET);
+        
+       
+        fgets(buffer, sizeof(buffer), hSite); 
+        
+
+        if (!fgets(buffer, sizeof(buffer), hSite)) {
+            return false; 
+        }
+
+        buffer[strlen(buffer) - 1] = '\0'; 
+        
+        int cmp = strcmp((char *)site, buffer);
+        if (cmp == 0) {
+            return true; 
+        } else if (cmp < 0) {
+            right = middle - 1;
+        } else {
+            left = middle + 1;
+        }
+    }
+
+    return false; // Site not found in the file
+}
+
+bool isHarmful(unsigned char *site, FILE *hSite) {
+    return binarySearch(hSite, site);
 }
 
 unsigned char* dump(unsigned char* buf, int size) {
@@ -95,6 +127,7 @@ unsigned char* dump(unsigned char* buf, int size) {
 
 	return host_str;
 }
+
 
 
 static u_int32_t print_pkt (struct nfq_data *tb)
@@ -146,6 +179,9 @@ static u_int32_t print_pkt (struct nfq_data *tb)
 /* 	if (ret >= 0)
 		printf("payload_len=%d\n", ret); */
 
+	//
+
+
 	if(isHttp(data,ret)){
     	host_str=dump(data,ret);
 		check=1;
@@ -177,6 +213,7 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 	else{
 		return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 	}
+	fseek(harmfulSite	, 0, SEEK_SET);
 	check=0;
 	host_str=NULL;
 
@@ -195,8 +232,19 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Usage: %s <harmful_site>\n", argv[0]);
 		exit(1);
 	}
-	harmfulSite= (unsigned char*)argv[1];
-	printf("argu is %s\n",harmfulSite);
+
+	harmfulSite=fopen(argv[1],"r+");
+
+	if(harmfulSite==NULL){
+		printf("오류..;;;");
+	}
+
+	char strTemp[255];
+	char *pStr;
+
+
+	// 파일 받아오고, 패킷 요청 올때마다 알고리즘으로 해당 사이트 조회
+	printf("argu is %s\n",argv[1]);
 	printf("opening library handle\n");
 	h = nfq_open();
 	if (!h) {
@@ -233,17 +281,17 @@ int main(int argc, char **argv)
 
 	for (;;) {
 		if ((rv = recv(fd, buf, sizeof(buf), 0)) >= 0) {
-/* 			printf("pkt received\n"); */
+			printf("pkt received\n");
 			nfq_handle_packet(h, buf, rv);
 			continue;
 		}
-		/* if your application is too slow to digest the packets that
+/* 		if your application is too slow to digest the packets that
 		 * are sent from kernel-space, the socket buffer that we use
 		 * to enqueue packets may fill up returning ENOBUFS. Depending
 		 * on your application, this error may be ignored. nfq_nlmsg_verdict_putPlease, see
 		 * the doxygen documentation of this library on how to improve
-		 * this situation.
-		 */
+		 * this situation. */
+		
 		if (rv < 0 && errno == ENOBUFS) {
 			printf("losing packets!\n");
 			continue;
